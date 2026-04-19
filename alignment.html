@@ -657,7 +657,7 @@
 const ASSETS = {
   knightAttack:  Array.from({length: 50}, (_, i) => `frame_${String(i).padStart(3,'0')}.png`),
   knightBlock:   Array.from({length: 8},  (_, i) => `block_${i+1}.png`),
-  knightRecover: Array.from({length: 4},  (_, i) => `recover_frame_${String(i).padStart(3,'0')}.png`),
+  knightRecover: Array.from({length: 4},  (_, i) => `recover_frame_transparent_${String(i).padStart(3,'0')}.png`),
   // Disc (kamikaze replacement — ball assets removed)
   // Rotate sprite is named lowercase with frames 002-008 (missing 000-001)
   discRotate:    Array.from({length: 7}, (_, i) => `disc_rotate_frame_${String(i+2).padStart(3,'0')}.png`),
@@ -1731,6 +1731,14 @@ function setTelegraphDirection(kind) {
 }
 
 
+function setEnemyMirror(el, mirrored) {
+  el.style.transform = mirrored
+    ? 'translate(-50%, -50%) scaleX(-1)'
+    : 'translate(-50%, -50%)';
+  el.classList.toggle('mirrored', mirrored);
+}
+
+
 function updateNinjaSpriteFrame(src) {
   const mirrored = ninja.classList.contains('mirrored');
   ninja.style.backgroundImage = `url('${src}')`;
@@ -1941,11 +1949,10 @@ async function runNinjaExchange() {
   // Source ninja attack frames are visually reversed relative to the logical attack lanes.
   // So we apply the horizontal flip opposite the logical pattern so the on-screen motion
   // matches the existing telegraph arrow directions for BOTH beats of the combo.
-  if (mirrored) {
-    ninja.classList.remove('mirrored');
-  } else {
-    ninja.classList.add('mirrored');
-  }
+  // Source ninja attack frames are visually reversed relative to the logical attack lanes.
+  // Apply the mirror directly to the inline transform so it still works after the reveal
+  // cinematic (which leaves an inline transform behind).
+  setEnemyMirror(ninja, !mirrored);
   try {
     await ninjaGroundExchange(token, mirrored);
   } catch (e) {
@@ -1962,11 +1969,7 @@ async function knightExchange(token) {
   attackDirection = Math.random() < 0.5 ? 'downRight' : 'downLeft';
   // Set telegraph arrow to the COUNTER direction while keeping sprite orientation.
   setTelegraphDirection(attackDirection);
-  if (attackDirection === 'downRight') {
-    knight.classList.remove('mirrored');
-  } else {
-    knight.classList.add('mirrored');
-  }
+  setEnemyMirror(knight, attackDirection === 'downLeft');
   knight.style.backgroundColor = 'transparent';
   knight.style.backgroundBlendMode = 'normal';
   knight.style.mixBlendMode = 'normal';
@@ -2203,8 +2206,11 @@ async function revealEnemy(enemyEl, firstFrameSrc, displayName, statusText) {
   if (statusText) setStatus(statusText, 1400);
   await wait(800);
 
-  // Restore enemy element transition to its normal idle state
+  // Restore enemy element transition to its normal idle state.
+  // Clear the inline transform left by the reveal so later mirror flips (scaleX) and
+  // default centering work correctly during combat.
   enemyEl.style.transition = '';
+  enemyEl.style.transform = '';
   enemyBar.classList.remove('locking');
 }
 

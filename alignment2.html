@@ -114,6 +114,11 @@
     filter: drop-shadow(0 0 28px rgba(255,51,85,0.65));
     /* disc uses transform for attack arcs, so no default transform override */
   }
+  #knight {
+    width: 156%;
+    height: 156%;
+    filter: drop-shadow(0 0 44px rgba(255,51,85,0.82));
+  }
   .enemy.mirrored { transform: translate(-50%, -50%) scaleX(-1); }
 
   /* --- HUD --- */
@@ -1973,22 +1978,14 @@ async function runNinjaExchange() {
   scheduleNextExchange(650 + Math.random() * 400);
 }
 
-async function knightComboContinue(token) {
-  // Brief breath between chained knight attacks before the next slash begins.
-  await wait(180, token);
-  if (token !== currentExchangeToken) throw new Error('aborted');
-  await knightExchange(token, true);
-}
+async function knightExchange(token) {
+  // Single-block knight pattern: one opening after each successful parry.
+  // Add only slight variability in how long the sword stays loaded over his head.
+  comboTotal = 1;
+  comboIndex = 0;
+  comboPattern = '';
 
-async function knightExchange(token, isChainContinuation = false) {
-  if (!isChainContinuation || comboPattern !== 'knightChain') {
-    comboTotal = 1 + Math.floor(Math.random() * 3);
-    comboIndex = 0;
-    comboPattern = 'knightChain';
-  }
-  // Pick a strike direction (varies each exchange)
   attackDirection = Math.random() < 0.5 ? 'downRight' : 'downLeft';
-  // Set telegraph arrow to the COUNTER direction while keeping sprite orientation.
   setTelegraphDirection(attackDirection);
   setEnemyMirror(knight, attackDirection === 'downLeft');
   knight.style.backgroundColor = 'transparent';
@@ -1999,52 +1996,52 @@ async function knightExchange(token, isChainContinuation = false) {
   Audio.playSwing();
 
   // --- PHASE 1: EARLY WINDUP (readable, but parry not live yet) ---
+  // Get the sword overhead quickly, then hold there briefly. Frames 25-32 are
+  // intentionally skipped so the player is not asked to block while the blade
+  // is still sitting over the knight's head.
   state = State.TRANSITION;
   telegraph.classList.remove('show');
   setStatus('');
   const preWindupSchedule = [];
-  for (let f = 0; f <= 14; f++) {
-    preWindupSchedule.push({ frame: f, duration: 24 });
+  for (let f = 0; f <= 24; f++) {
+    preWindupSchedule.push({ frame: f, duration: 18 });
   }
+  preWindupSchedule.push({ frame: 24, duration: 85 + Math.floor(Math.random() * 95) });
   await playFramesAdvanced(knight, ASSETS.knightAttack, preWindupSchedule);
   if (token !== currentExchangeToken) throw new Error('aborted');
 
-  // --- PHASE 2: LIVE PARRY WINDOW (late in the windup, close to the downswing) ---
+  // --- PHASE 2: LIVE PARRY WINDOW (starts once the downswing actually begins) ---
+  // Downswing begins at frame 33, so open the block window there and slow it down.
   state = State.TELEGRAPH;
   telegraph.classList.add('show');
   setStatus(attackDirection === 'downRight' ? 'PARRY ↖' : 'PARRY ↗', 0);
   const liveWindowSchedule = [
-    { frame: 15, duration: 24 },
-    { frame: 16, duration: 24 },
-    { frame: 17, duration: 26 },
-    { frame: 18, duration: 28 },
-    { frame: 19, duration: 34 },
-    { frame: 20, duration: 44 },
-    { frame: 21, duration: 50 },
-    { frame: 22, duration: 42 },
-    { frame: 23, duration: 32 },
-    { frame: 24, duration: 24 }
+    { frame: 33, duration: 52 },
+    { frame: 34, duration: 56 },
+    { frame: 35, duration: 56 },
+    { frame: 36, duration: 52 },
+    { frame: 37, duration: 48 },
+    { frame: 38, duration: 44 },
+    { frame: 39, duration: 40 }
   ];
   await playFramesAdvanced(knight, ASSETS.knightAttack, liveWindowSchedule);
   if (token !== currentExchangeToken) throw new Error('aborted');
 
-  // --- PHASE 3: COMMIT + STRIKE (too late to parry) ---
+  // --- PHASE 3: COMMIT + IMPACT (too late to parry) ---
   state = State.COMMITTED;
   commitFlash();
   telegraph.classList.remove('show');
   setStatus('');
   const strikeSchedule = [];
-  for (let f = 25; f <= 49; f++) {
+  for (let f = 40; f <= 49; f++) {
     strikeSchedule.push({ frame: f, duration: 18 });
   }
   await playFramesAdvanced(knight, ASSETS.knightAttack, strikeSchedule);
   if (token !== currentExchangeToken) throw new Error('aborted');
 
-  // If we reached here, player didn't parry — take a hit
   if (state === State.COMMITTED) {
     applyPlayerDamage();
     knight.style.backgroundImage = `url('${ASSETS.knightAttack[0]}')`;
-    comboTotal = 1; comboIndex = 0; comboPattern = '';
     state = State.IDLE;
   }
 }
@@ -2169,12 +2166,17 @@ async function onCounterAttack() {
 }
 
 function applyPlayerDamage() {
-  playerHealth -= DAMAGE_PLAYER;
+  playerHealth = Math.max(0, playerHealth - DAMAGE_PLAYER);
   setHP('player', playerHealth);
   Audio.playHurt(); // dedicated hurt feedback
   flashScreen('red', 180);
   shake(10, 400);
   setStatus('HIT', 700);
+  if (playerHealth <= 0) {
+    setTimeout(() => {
+      if (state !== State.LOST && !gameOverInProgress) onPlayerDefeated();
+    }, 0);
+  }
 }
 function applyEnemyDamage() {
   enemyHealth -= DAMAGE_ENEMY;
@@ -2542,13 +2544,6 @@ async function onParrySuccess() {
         if (e.message === 'aborted') return;
         throw e;
       }
-    } else if (currentEnemy === 'knight') {
-      try {
-        await knightComboContinue(parryToken);
-      } catch (e) {
-        if (e.message === 'aborted') return;
-        throw e;
-      }
     }
     return;
   }
@@ -2766,6 +2761,13 @@ async function onPlayerDefeated() {
   exitArrow.classList.remove('show');
   setStatus('');
 
+  // Freeze enemy presentation so no in-flight sprite updates keep running under the overlay.
+  [knight, disc, ball, ninja].forEach(el => {
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.animation = 'none';
+  });
+
   // Hide any other overlays just in case and ensure the lose screen can take focus.
   titleScreen.classList.remove('show');
   winScreen.classList.remove('show');
@@ -2775,11 +2777,9 @@ async function onPlayerDefeated() {
   flashScreen('red', 400);
   shake(14, 600);
 
-  // Use a non-cancelable delay here. Using wait() can be interrupted by later clearAllTimers()
-  // calls from async combat branches, which can prevent the lose screen from ever appearing.
+  // Non-cancelable delay before the lose screen takes over.
   await new Promise(resolve => setTimeout(resolve, 1200));
   loseScreen.classList.add('show');
-  gameOverInProgress = false;
 }
 
 
